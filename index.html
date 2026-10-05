@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Model Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  /* ===== 3D VIEWER STYLES ===== */
+  .model-container { margin: 48px 0; }
+  .model-viewer {
+    width: 100%; height: 600px; background: #f5f5f5;
+    border-radius: 8px; position: relative; overflow: hidden;
+    touch-action: none; cursor: grab;
+  }
+  .model-viewer:active { cursor: grabbing; }
+  .model-viewer canvas { display: block; width: 100%; height: 100%; }
+  .loading {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%); color: #666; font-size: 1rem;
+  }
+  .caption { margin-top: 8px; font-size: 0.875rem; color: #666; font-style: italic; text-align: center; }
+  .instructions { margin-top: 4px; font-size: 0.75rem; color: #999; text-align: center; }
+  .scroll-hint {
+    position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+    color: #666; font-size: 0.875rem; padding: 8px 16px;
+    background: rgba(255,255,255,0.9); border-radius: 20px;
+    pointer-events: none; animation: fadeInOut 3s ease-in-out infinite;
+  }
+  @keyframes fadeInOut { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+  .zoom-controls {
+    position: absolute; bottom: 20px; right: 20px;
+    display: flex; flex-direction: column; gap: 10px; z-index: 10;
+  }
+  .movement-controls {
+    position: absolute; bottom: 20px; right: 80px;
+    display: grid; grid-template-columns: repeat(3, 44px);
+    grid-template-rows: repeat(3, 44px); gap: 4px; z-index: 10;
+  }
+  .zoom-btn, .move-btn {
+    width: 44px; height: 44px; background: white;
+    border: 2px solid #ddd; border-radius: 8px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.25rem; color: #333; transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  .zoom-btn:hover, .move-btn:hover { background: #f8f8f8; border-color: #999; transform: scale(1.05); }
+  .zoom-btn:active, .move-btn:active { transform: scale(0.95); }
+  .move-up { grid-column: 2; grid-row: 1; }
+  .move-left { grid-column: 1; grid-row: 2; }
+  .move-right { grid-column: 3; grid-row: 2; }
+  .move-down { grid-column: 2; grid-row: 3; }
+  .ar-button {
+    position: absolute; bottom: 20px; left: 20px;
+    background: white; border: 2px solid #ddd; border-radius: 8px;
+    padding: 12px 20px; font-size: 0.9rem; font-weight: 600; color: #333;
+    cursor: pointer; display: none; align-items: center; gap: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1); transition: all 0.2s;
+    z-index: 10; text-decoration: none; font-family: sans-serif;
+  }
+  .ar-button.visible { display: flex; }
+  .ar-button:hover { background: #f8f8f8; border-color: #999; transform: scale(1.05); }
+  /* iOS Quick Look requires the <a rel="ar"> to contain a single <img>,
+     so the whole button label is drawn as one SVG image */
+  .ar-button img { display: block; height: 20px; }
+  /* Desktop: QR panel to hand off to a phone */
+  .qr-panel {
+    position: absolute; bottom: 76px; left: 20px; z-index: 11;
+    background: white; border: 2px solid #ddd; border-radius: 8px;
+    padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    display: none; flex-direction: column; align-items: center; gap: 10px;
+    font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 0.8rem; color: #555;
+  }
+  .qr-panel.open { display: flex; }
+  .qr-panel p { margin: 0; text-align: center; max-width: 170px; }
+  .qr-close {
+    position: absolute; top: 4px; right: 6px; border: none; background: none;
+    font-size: 1rem; color: #999; cursor: pointer; line-height: 1;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 3D VIEWER MARKUP ===== -->
+<div class="model-container">
+  <div class="model-viewer" id="model1">
+    <div class="loading">Loading 3D model...</div>
+    <div class="scroll-hint">Drag to rotate • WASD to move</div>
+    <a href="#" rel="ar" class="ar-button" id="ar-button"><img alt="View in AR" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='20' viewBox='0 0 110 20'%3E%3Cg fill='none' stroke='%23333' stroke-width='2'%3E%3Crect x='1' y='1' width='18' height='18' rx='2'/%3E%3Cpath d='M10 1v18M1 10h18'/%3E%3C/g%3E%3Ctext x='28' y='15' font-family='-apple-system,Segoe UI,sans-serif' font-size='14' font-weight='600' fill='%23333'%3EView in AR%3C/text%3E%3C/svg%3E"></a>
+    <div class="qr-panel" aria-hidden="true">
+      <button class="qr-close" title="Close">×</button>
+      <div class="qr-code"></div>
+      <p>Scan with your phone to see the key in your room</p>
+    </div>
+    <div class="movement-controls">
+      <button class="move-btn move-up" id="move-forward" title="Move Forward (W)">↑</button>
+      <button class="move-btn move-left" id="move-left" title="Move Left (A)">←</button>
+      <button class="move-btn move-right" id="move-right" title="Move Right (D)">→</button>
+      <button class="move-btn move-down" id="move-backward" title="Move Backward (S)">↓</button>
+    </div>
+    <div class="zoom-controls">
+      <button class="zoom-btn" id="zoom-in" title="Zoom In">🔍+</button>
+      <button class="zoom-btn" id="zoom-out" title="Zoom Out">🔍−</button>
+    </div>
+  </div>
+  <p class="instructions">Drag to rotate • Scroll or use buttons to zoom • Use WASD or arrow buttons to move • Tap "View in AR" on iPhone to see in your space</p>
+</div>
+
+<!-- ===== 3D VIEWER SCRIPT ===== -->
+<script>
+// ===== PLATFORM DETECTION =====
+// iOS (iPhone/iPad) -> AR Quick Look with .usdz
+// Android           -> Google Scene Viewer with .glb
+// Desktop           -> QR code to open the page on a phone
+function detectPlatform(override) {
+  if (override && override !== 'auto') return override;
+  const ua = navigator.userAgent;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS reports as Mac
+  if (isIOS) return 'ios';
+  if (/Android/i.test(ua)) return 'android';
+  return 'desktop';
+}
+
+// The button label is one SVG <img>, because iOS Quick Look requires
+// the <a rel="ar"> to contain exactly one image
+function setButtonLabel(img, text) {
+  if (!img) return;
+  const w = 30 + Math.ceil(text.length * 8.6);
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" viewBox="0 0 ${w} 20">` +
+    `<g fill="none" stroke="#333" stroke-width="2"><rect x="1" y="1" width="18" height="18" rx="2"/>` +
+    `<path d="M10 1v18M1 10h18"/></g>` +
+    `<text x="28" y="15" font-family="-apple-system,Segoe UI,sans-serif" font-size="14" font-weight="600" fill="#333">${text}</text></svg>`;
+  img.src = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  img.alt = text;
+}
+
+function setupARButton(platform, cfg, btn, container, opt) {
+  if (!btn) return;
+  const img = btn.querySelector('img');
+
+  if (platform === 'ios' && cfg.usdz) {
+    btn.href = cfg.usdz;
+    btn.setAttribute('rel', 'ar');
+    setButtonLabel(img, 'View in AR');
+
+  } else if (platform === 'android' && cfg.glb) {
+    // Scene Viewer needs an absolute HTTPS URL to the .glb
+    const glbUrl = new URL(cfg.glb, location.href).href;
+    btn.href =
+      'intent://arvr.google.com/scene-viewer/1.0' +
+      '?file=' + encodeURIComponent(glbUrl) +
+      '&mode=ar_preferred' +            // falls back to 3D view if the phone lacks ARCore
+      (cfg.title ? '&title=' + encodeURIComponent(cfg.title) : '') +
+      '#Intent;scheme=https;package=com.google.android.googlequicksearchbox;' +
+      'action=android.intent.action.VIEW;' +
+      'S.browser_fallback_url=' + encodeURIComponent(location.href) + ';end;';
+    btn.removeAttribute('rel');
+    setButtonLabel(img, 'View in AR');
+
+  } else if (platform === 'desktop') {
+    const panel = container.querySelector('.qr-panel');
+    if (!panel) return;
+    btn.href = '#';
+    btn.removeAttribute('rel');
+    setButtonLabel(img, 'View on phone');
+
+    const setOpen = open => {
+      panel.classList.toggle('open', open);
+      panel.setAttribute('aria-hidden', String(!open));
+    };
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      if (!panel.dataset.ready && window.QRCode) {
+        new QRCode(panel.querySelector('.qr-code'), {
+          text: location.href, width: 160, height: 160,
+          correctLevel: QRCode.CorrectLevel.M
+        });
+        panel.dataset.ready = '1';
+      }
+      setOpen(!panel.classList.contains('open'));
+    }, opt());
+    panel.querySelector('.qr-close')?.addEventListener('click', () => setOpen(false), opt());
+
+  } else {
+    return; // missing model file for this platform: keep the button hidden
+  }
+  btn.classList.add('visible');
+}
+
+function init3DViewer(cfg, arPlatform) {
+  const container = document.getElementById(cfg.containerId);
+  const loading = container.querySelector('.loading');
+  const scrollHint = container.querySelector('.scroll-hint');
+  const arButton = document.getElementById(cfg.arButtonId);
+
+  // One AbortController removes every listener on dispose, so lazy
+  // re-loading doesn't stack duplicate handlers (which sped up zoom/movement)
+  const ac = new AbortController();
+  const opt = (extra = {}) => ({ signal: ac.signal, ...extra });
+  const hideHint = () => { if (scrollHint) scrollHint.style.display = 'none'; };
+
+  // ---- AR: choose the right viewer for this device ----
+  setupARButton(detectPlatform(arPlatform), cfg, arButton, container, opt);
+
+  // ---- Scene setup ----
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf5f5f5);
+  const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 1000);
+  camera.position.set(0, 2, 8);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight1.position.set(5, 10, 5);
+  scene.add(dirLight1);
+  const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+  dirLight2.position.set(-5, 5, -5);
+  scene.add(dirLight2);
+
+  // ---- Configuration ----
+  const initialRotationDegrees = { x: 0, y: 45, z: 0 };
+  const minZ = 2, maxZ = 15, moveSpeed = 0.1, zoomSpeed = 0.5, scrollSensitivity = 0.02;
+
+  const deg = Math.PI / 180;
+  const initialRotation = {
+    x: initialRotationDegrees.x * deg,
+    y: initialRotationDegrees.y * deg,
+    z: initialRotationDegrees.z * deg
+  };
+  const clampZ = z => Math.max(minZ, Math.min(maxZ, z));
+
+  let model = null;
+  let targetZ = 8;
+  let targetRotation = { x: 0, y: 0, z: 0 };
+  const keys = {};
+  const held = { forward: false, backward: false, left: false, right: false };
+
+  // ---- Keyboard ----
+  document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; }, opt());
+  document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; }, opt());
+
+  // ---- Page scroll / swipe zooms the model (as in the original) ----
+  window.addEventListener('wheel', e => {
+    if (!model) return;
+    targetZ = clampZ(targetZ - e.deltaY * scrollSensitivity);
+    hideHint();
+  }, opt({ passive: true }));
+
+  let touchStartY = 0;
+  window.addEventListener('touchstart', e => { touchStartY = e.touches[0].clientY; }, opt({ passive: true }));
+  window.addEventListener('touchmove', e => {
+    if (!model) return;
+    const y = e.touches[0].clientY;
+    targetZ = clampZ(targetZ + (touchStartY - y) * 0.01);
+    touchStartY = y;
+    hideHint();
+  }, opt({ passive: true }));
+
+  // ---- Drag to rotate (mouse) ----
+  let isDragging = false, prev = { x: 0, y: 0 };
+  const canvas = renderer.domElement;
+  canvas.addEventListener('mousedown', e => { isDragging = true; prev = { x: e.clientX, y: e.clientY }; }, opt());
+  canvas.addEventListener('mousemove', e => {
+    if (!isDragging || !model) return;
+    targetRotation.y += (e.clientX - prev.x) * 0.01;
+    targetRotation.x += (e.clientY - prev.y) * 0.01;
+    prev = { x: e.clientX, y: e.clientY };
+    hideHint();
+  }, opt());
+  document.addEventListener('mouseup', () => { isDragging = false; }, opt());
+  canvas.addEventListener('mouseleave', () => { isDragging = false; }, opt());
+
+  // ---- Drag to rotate (touch) ----
+  let touchDrag = null;
+  canvas.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) touchDrag = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, opt({ passive: true }));
+  canvas.addEventListener('touchmove', e => {
+    if (!touchDrag || !model || e.touches.length !== 1) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    targetRotation.y += (t.clientX - touchDrag.x) * 0.01;
+    targetRotation.x += (t.clientY - touchDrag.y) * 0.01;
+    touchDrag = { x: t.clientX, y: t.clientY };
+    hideHint();
+  }, opt({ passive: false }));
+  canvas.addEventListener('touchend', () => { touchDrag = null; }, opt());
+
+  // ---- Zoom buttons ----
+  document.getElementById(cfg.zoomInId)?.addEventListener('click', () => { targetZ = clampZ(targetZ - zoomSpeed); }, opt());
+  document.getElementById(cfg.zoomOutId)?.addEventListener('click', () => { targetZ = clampZ(targetZ + zoomSpeed); }, opt());
+
+  // ---- Hold-to-move buttons ----
+  function bindHold(id, dir) {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    const on = e => { if (e.type === 'touchstart') e.preventDefault(); held[dir] = true; };
+    const off = e => { if (e.type === 'touchend') e.preventDefault(); held[dir] = false; };
+    btn.addEventListener('mousedown', on, opt());
+    btn.addEventListener('mouseup', off, opt());
+    btn.addEventListener('mouseleave', off, opt());
+    btn.addEventListener('touchstart', on, opt({ passive: false }));
+    btn.addEventListener('touchend', off, opt({ passive: false }));
+  }
+  bindHold(cfg.moveForwardId, 'forward');
+  bindHold(cfg.moveBackwardId, 'backward');
+  bindHold(cfg.moveLeftId, 'left');
+  bindHold(cfg.moveRightId, 'right');
+
+  // ---- Resize ----
+  window.addEventListener('resize', () => {
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight);
+  }, opt());
+
+  // ---- Load model ----
+  loading.style.display = 'block';
+  let disposed = false;
+  new THREE.GLTFLoader().load(cfg.glb, gltf => {
+    if (disposed) return; // finished loading after the user scrolled away
+    const group = new THREE.Group();
+    const loaded = gltf.scene;
+    const box = new THREE.Box3().setFromObject(loaded);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const scale = 2 / Math.max(size.x, size.y, size.z);
+
+    loaded.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+    loaded.scale.multiplyScalar(scale);
+    group.add(loaded);
+    scene.add(group);
+
+    group.rotation.set(initialRotation.x, initialRotation.y, initialRotation.z);
+    targetRotation = { ...initialRotation };
+    model = group;
+    loading.style.display = 'none';
+  }, undefined, err => {
+    loading.textContent = 'Model failed to load. Check the file path.';
+    console.error(err);
+  });
+
+  // ---- Render loop ----
+  let animationId = null;
+  (function animate() {
+    animationId = requestAnimationFrame(animate);
+    if (model) {
+      if (keys['w'] || held.forward) targetZ -= moveSpeed;
+      if (keys['s'] || held.backward) targetZ += moveSpeed;
+      if (keys['a'] || held.left) camera.position.x -= moveSpeed;
+      if (keys['d'] || held.right) camera.position.x += moveSpeed;
+
+      camera.position.z += (targetZ - camera.position.z) * 0.1;
+      model.rotation.x += (targetRotation.x - model.rotation.x) * 0.1;
+      model.rotation.y += (targetRotation.y - model.rotation.y) * 0.1;
+      model.rotation.z += (targetRotation.z - model.rotation.z) * 0.1;
+    }
+    camera.lookAt(scene.position);
+    renderer.render(scene, camera);
+  })();
+
+  // ---- Cleanup ----
+  return {
+    dispose() {
+      disposed = true;
+      cancelAnimationFrame(animationId);
+      ac.abort();
+      scene.traverse(child => {
+        child.geometry?.dispose();
+        const mats = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+        mats.forEach(m => {
+          Object.values(m).forEach(v => { if (v && v.isTexture) v.dispose(); });
+          m.dispose();
+        });
+      });
+      renderer.dispose();
+      renderer.domElement.remove();
+      scene.clear();
+    }
+  };
+}
+
+window.addEventListener('load', () => {
+  // ========== MODEL URLS ==========
+  // 'auto' detects the device. To preview another platform's button
+  // on your computer, set 'ios', 'android' or 'desktop'.
+  const AR_PLATFORM = 'auto';
+  const modelConfigs = [{
+    title: 'A key', // shown in Android Scene Viewer
+    containerId: 'model1', arButtonId: 'ar-button',
+    zoomInId: 'zoom-in', zoomOutId: 'zoom-out',
+    moveForwardId: 'move-forward', moveBackwardId: 'move-backward',
+    moveLeftId: 'move-left', moveRightId: 'move-right',
+    glb: './key.glb', usdz: './key.usdz'
+  }];
+  // ================================
+
+  // Lazy load when visible, dispose when off-screen
+  const viewers = new Map();
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      const id = entry.target.id;
+      if (entry.isIntersecting && !viewers.has(id)) {
+        const cfg = modelConfigs.find(c => c.containerId === id);
+        if (cfg) viewers.set(id, init3DViewer(cfg, AR_PLATFORM));
+      } else if (!entry.isIntersecting && viewers.has(id)) {
+        viewers.get(id).dispose();
+        viewers.delete(id);
+      }
+    });
+  }, { rootMargin: '100px', threshold: 0.1 });
+
+  modelConfigs.forEach(c => {
+    const el = document.getElementById(c.containerId);
+    if (el) observer.observe(el);
+  });
+});
+</script>
+</body>
+</html>
